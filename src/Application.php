@@ -1,6 +1,6 @@
 <?php
 
-namespace Rak\BB;
+namespace BB;
 
 require __DIR__ . '/../vendor/autoload.php';
 

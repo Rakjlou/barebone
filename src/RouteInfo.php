@@ -1,6 +1,6 @@
 <?php
 
-namespace Rak\BB;
+namespace BB;
 
 use FastRoute\Dispatcher;
 
