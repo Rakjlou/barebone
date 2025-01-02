@@ -34,12 +34,12 @@ abstract class Application
 			->createResponse(200)
 		;
 
-		$this->serverRequest = (new ServerRequestCreator(
+		$this->serverRequest = new ServerRequestCreator(
 			$this->psr17Factory,
 			$this->psr17Factory,
 			$this->psr17Factory,
 			$this->psr17Factory
-		))->fromGlobals();
+		)->fromGlobals();
 
 		$this->dispatcher = \FastRoute\simpleDispatcher(
 			fn(\FastRoute\RouteCollector $r) => $this->setupRouteCollector($r)
