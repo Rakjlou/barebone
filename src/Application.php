@@ -4,9 +4,10 @@ namespace BB;
 
 require __DIR__ . '/../vendor/autoload.php';
 
+use Psr\Http\Message\{ResponseInterface, StreamInterface};
+
+use Nyholm\Psr7\{Response, ServerRequest};
 use Nyholm\Psr7\Factory\Psr17Factory;
-use Nyholm\Psr7\Response;
-use Nyholm\Psr7\ServerRequest;
 use Nyholm\Psr7Server\ServerRequestCreator;
 
 use FastRoute\Dispatcher;
@@ -42,7 +43,7 @@ abstract class Application
 		)->fromGlobals();
 
 		$this->dispatcher = \FastRoute\simpleDispatcher(
-			fn(\FastRoute\RouteCollector $r) => $this->setupRouteCollector($r)
+			fn(RouteCollector $r) => $this->setupRouteCollector($r)
 		);
 
 		$this->routeInfo = new RouteInfo($this->dispatcher->dispatch(
@@ -60,16 +61,16 @@ abstract class Application
 		try
 		{
 			$dispatcherMap = [
-				Dispatcher::NOT_FOUND => [$this, 'dispatchNotFound'],
-				Dispatcher::METHOD_NOT_ALLOWED => [$this, 'dispatchMethodNotAllowed'],
-				Dispatcher::FOUND => [$this, 'dispatchFound'],
+				Dispatcher::NOT_FOUND => $this::dispatchNotFound(...),
+				Dispatcher::METHOD_NOT_ALLOWED => $this::dispatchMethodNotAllowed(...),
+				Dispatcher::FOUND => $this::dispatchFound(...),
 			];
-			$handler = $dispatcherMap[$this->routeInfo->status] ?? null;
+			$dispatcherCallback = $dispatcherMap[$this->routeInfo->status] ?? null;
 
-			ob_start(fn (string $buffer, int $phase) => null);
-
-			if ($handler)
-				$handler();
+			if ($dispatcherCallback)
+				$dispatcherCallback();
+			else
+				throw new \RuntimeException("No dispatcher callback found for route status {$this->routeInfo->status}");
 		}
 		catch (\Exception $e)
 		{
@@ -95,22 +96,56 @@ abstract class Application
 
 	protected function dispatchFound()
 	{
-		($this->routeInfo->handler)();
+		$result = ($this->routeInfo->handler)($this);
+
+		$this->response = match(true) {
+			$result instanceof ResponseInterface =>
+				$result,
+			$result instanceof StreamInterface =>
+				$this->response->withBody($result),
+			is_resource($result) =>
+				$this->response->withBody(
+					$this->psr17Factory->createStreamFromResource($result)
+				),
+			is_array($result) || is_object($result) =>
+				$this->response
+					->withHeader('Content-Type', 'application/json')
+					->withBody(
+						$this->psr17Factory->createStream(
+							json_encode($result, JSON_THROW_ON_ERROR
+						)
+					)
+				),
+			default =>
+				$this->response->withBody(
+					$this->psr17Factory->createStream((string)$result)
+				)
+		};
 	}
 
 	protected function dispatchException(\Exception $e)
 	{
-		$this->response = $this->psr17Factory->createResponse(500);
-		echo get_class($e) . ': ' . $e->getMessage() . '<br>';
-		debug_print_backtrace();
+		$errorData = [
+			'error' => get_class($e),
+			'message' => $e->getMessage(),
+			'trace' => $e->getTrace()
+		];
+
+		$this->response = $this->psr17Factory
+			->createResponse(500)
+			->withHeader('Content-Type', 'application/json')
+			->withBody($this->psr17Factory->createStream(
+				json_encode($errorData, JSON_THROW_ON_ERROR)
+			))
+		;
 	}
 
-	protected function redirect(int $status, string $location)
+	protected function redirect(string $location, int $status = 302)
 	{
 		$this->response = $this
 			->psr17Factory
-			->createResponse(301)
-			->withHeader('Location', '/')
+			->createResponse($status)
+			->withHeader('Location', $location)
 		;
 	}
 
@@ -118,11 +153,7 @@ abstract class Application
 	{
 		$emitter = new \Laminas\HttpHandlerRunner\Emitter\SapiEmitter;
 
-		$emitter->emit(
-			$response->withBody(
-				$this->psr17Factory->createStream(ob_get_flush())
-			)
-		);
+		$emitter->emit($response);
 	}
 
 	protected function setupPlatesEngine() { }
